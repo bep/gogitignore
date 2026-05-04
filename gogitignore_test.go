@@ -274,7 +274,7 @@ bar
 			files: `
 -- !important --
 I
--- "#hash" --
+-- #hash --
 H
 -- .gitignore --
 \!important
