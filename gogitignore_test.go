@@ -288,7 +288,7 @@ H
 		t.Run(tc.name, func(t *testing.T) {
 			c := qt.New(t)
 			h := &testHelper{C: c}
-			tree := NewTree(Config{})
+			tree := New()
 			h.writeFiles(tree, tc.files)
 			for _, p := range tc.check {
 				expected := h.shouldIgnoreGit(p)
@@ -314,9 +314,39 @@ func TestParseIgnoreFile(t *testing.T) {
 	c.Assert(m.Match("other", false), qt.IsFalse)
 }
 
+// TestTreeGlobalPatterns covers the reserved empty path "" — patterns added
+// there are evaluated first and can be overridden by an in-tree .gitignore,
+// matching how Git layers core.excludesFile underneath the working tree's
+// .gitignore files.
+func TestTreeGlobalPatterns(t *testing.T) {
+	c := qt.New(t)
+
+	tree := New()
+	tree.AddPatterns("", "*.log", "build/")
+
+	c.Assert(tree.Match("/a.log", false), qt.IsTrue, qt.Commentf("global *.log applies at root"))
+	c.Assert(tree.Match("/sub/a.log", false), qt.IsTrue, qt.Commentf("global *.log applies at any depth"))
+	c.Assert(tree.Match("/build", true), qt.IsTrue, qt.Commentf("global build/ applies as dir"))
+	c.Assert(tree.Match("/build/x.txt", false), qt.IsTrue, qt.Commentf("excluded ancestor wins"))
+	c.Assert(tree.Match("/main.go", false), qt.IsFalse)
+
+	// The in-tree root .gitignore runs *after* the global, so a negation
+	// there must be able to re-include a path the global excluded.
+	tree.AddPatterns("/", "!important.log")
+	c.Assert(tree.Match("/important.log", false), qt.IsFalse, qt.Commentf("root .gitignore overrides global"))
+	c.Assert(tree.Match("/a.log", false), qt.IsTrue, qt.Commentf("non-negated globals still apply"))
+
+	// Adding at "" must not collide with adding at "/": they're two distinct
+	// matchers in the tree, both applicable to every path.
+	tree.AddPatterns("", "*.tmp")
+	c.Assert(tree.Match("/x.tmp", false), qt.IsTrue)
+	c.Assert(tree.Match("/important.log", false), qt.IsFalse, qt.Commentf("root negation still wins"))
+	c.Assert(tree.Match("/a.log", false), qt.IsFalse, qt.Commentf("global was replaced; *.log no longer there"))
+}
+
 func TestAddPatternsReplaces(t *testing.T) {
 	c := qt.New(t)
-	tree := NewTree(Config{})
+	tree := New()
 	tree.AddPatterns("/", "*.log")
 	c.Assert(tree.Match("/a.log", false), qt.IsTrue)
 	tree.AddPatterns("/", "*.tmp")

@@ -5,16 +5,12 @@
 package gogitignore
 
 import (
-	"iter"
 	"strings"
 	"sync"
 
 	"github.com/gobwas/glob"
 	"github.com/gohugoio/go-radix"
 )
-
-// Config configures a Tree. Reserved for future use.
-type Config struct{}
 
 // Tree holds a hierarchy of gitignore matchers keyed by the directory the
 // matcher applies to.
@@ -25,15 +21,12 @@ type Tree struct {
 	// "/foobar/x" when we look up the longest prefix.
 	tree *radix.Tree[Matcher]
 
-	mu  sync.RWMutex
-	cfg Config
+	mu sync.RWMutex
 }
 
-// TODO1 global gitignore.
-func NewTree(cfg Config) *Tree {
+func New() *Tree {
 	return &Tree{
 		tree: radix.New[Matcher](),
-		cfg:  cfg,
 	}
 }
 
@@ -41,6 +34,12 @@ func NewTree(cfg Config) *Tree {
 // matcher at the given path. The path is the directory the patterns are
 // relative to (e.g. "/" for root, "/sub" for a sub-directory). Replaces
 // any existing matcher at that path.
+//
+// The empty path "" is reserved for global patterns: they apply to every
+// path in the tree and are evaluated before any in-tree .gitignore, so an
+// in-tree pattern (negation included) can override a global one. This is
+// the slot for patterns sourced from e.g. core.excludesFile; reading those
+// from disk is the caller's responsibility.
 func (t *Tree) AddPatterns(pth string, patterns ...string) {
 	t.AddMatcher(pth, parsePatternList(patterns))
 }
@@ -53,9 +52,8 @@ func (t *Tree) AddMatcher(pth string, m Matcher) {
 	t.tree.Insert(normalizeBase(pth), m)
 }
 
-// Match reports whether pth should be ignored. pth is a Unix-style absolute
-// path with forward slashes (e.g. "/foo/bar.txt"). isDir reports whether pth
-// represents a directory.
+// Match reports whether pth should be ignored. pth is a leading-slash, slash-separated path (e.g. "/foo/bar.txt") relative to the tree root.
+// isDir reports whether pth represents a directory.
 //
 // Match walks the tree from root down to pth, applying each .gitignore
 // matcher in turn. For every matcher it considers not just pth but every
@@ -88,15 +86,26 @@ func (t *Tree) Match(pth string, isDir bool) bool {
 	// > d), so those levels are finalized and we can short-circuit if any
 	// of them is an excluded ancestor.
 	finalized := -1
-	for base, m := range t.matchers(pth) {
-		rel := pth[len(base):]
-		depth := strings.Count(base, "/") - 1
+	var isMatch bool
+	t.tree.WalkPath(pth, radix.WalkFn[Matcher](func(base string, m Matcher) (radix.WalkFlag, Matcher, error) {
+		// The empty base holds global patterns: rel is pth with its leading
+		// "/" trimmed and depth is -1 so we don't mark any level finalized;
+		// the in-tree root matcher (at "/") still has to run after this one.
+		var rel string
+		var depth int
+		if base == "" {
+			rel = pth[1:]
+			depth = -1
+		} else {
+			rel = pth[len(base):]
+			depth = strings.Count(base, "/") - 1
+		}
 
 		// Iterate the components of rel, applying patterns at each level.
 		// We slice rel directly rather than splitting to avoid allocating
 		// per-component strings.
 		cursor := 0
-		level := depth
+		level := max(depth, 0)
 		for {
 			slash := strings.IndexByte(rel[cursor:], '/')
 			var sub string
@@ -117,7 +126,8 @@ func (t *Tree) Match(pth string, isDir bool) bool {
 			// and excluded, pth is ignored regardless of what the deeper
 			// levels look like.
 			if level == depth && depth < n-1 && ignored[depth] {
-				return true
+				isMatch = true
+				return radix.WalkStop, m, nil
 			}
 			level++
 			if slash < 0 {
@@ -128,10 +138,17 @@ func (t *Tree) Match(pth string, isDir bool) bool {
 		upTo := min(depth, n-2)
 		for i := finalized + 1; i <= upTo; i++ {
 			if ignored[i] {
-				return true
+				isMatch = true
+				return radix.WalkStop, m, nil
 			}
 		}
 		finalized = upTo
+
+		return radix.WalkContinue, m, nil
+	}))
+
+	if isMatch {
+		return true
 	}
 
 	for i := finalized + 1; i < n-1; i++ {
@@ -140,20 +157,6 @@ func (t *Tree) Match(pth string, isDir bool) bool {
 		}
 	}
 	return ignored[n-1]
-}
-
-// matchers iterates the matchers whose base directory is a (non-strict)
-// prefix of pth, in outer-to-inner order. Yielded bases always end with
-// "/". Stopping the range stops the underlying tree walk.
-func (t *Tree) matchers(pth string) iter.Seq2[string, Matcher] {
-	return func(yield func(string, Matcher) bool) {
-		t.tree.WalkPath(pth, radix.WalkFn[Matcher](func(base string, m Matcher) (radix.WalkFlag, Matcher, error) {
-			if !yield(base, m) {
-				return radix.WalkStop, m, nil
-			}
-			return radix.WalkContinue, m, nil
-		}))
-	}
 }
 
 // Matcher holds the compiled patterns from a single .gitignore file.
@@ -281,7 +284,12 @@ func parsePattern(line string) (pattern, bool) {
 }
 
 func normalizeBase(p string) string {
-	if p == "" || p == "/" || p == "." {
+	if p == "" {
+		// Reserved for global patterns; "" is a prefix of every path so
+		// WalkPath visits it first, ahead of any in-tree matcher.
+		return ""
+	}
+	if p == "/" || p == "." {
 		return "/"
 	}
 	if !strings.HasPrefix(p, "/") {

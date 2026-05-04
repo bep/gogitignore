@@ -51,7 +51,7 @@ func BenchmarkParseIgnoreFile(b *testing.B) {
 }
 
 func BenchmarkMatchRootShallow(b *testing.B) {
-	tree := NewTree(Config{})
+	tree := New()
 	tree.AddMatcher("/", ParseIgnoreFile(realisticGitignore))
 
 	b.Run("ignored_literal", func(b *testing.B) {
@@ -72,7 +72,7 @@ func BenchmarkMatchRootShallow(b *testing.B) {
 }
 
 func BenchmarkMatchRootDeep(b *testing.B) {
-	tree := NewTree(Config{})
+	tree := New()
 	tree.AddMatcher("/", ParseIgnoreFile(realisticGitignore))
 
 	b.Run("ignored_via_dir", func(b *testing.B) {
@@ -96,7 +96,7 @@ func BenchmarkMatchRootDeep(b *testing.B) {
 func BenchmarkMatchNestedMatchers(b *testing.B) {
 	// Build a tree with .gitignore matchers at increasing depths so each
 	// Match call has to consult and combine multiple matchers.
-	tree := NewTree(Config{})
+	tree := New()
 	tree.AddMatcher("/", ParseIgnoreFile("*.log\n"))
 	depth := 8
 	base := ""
