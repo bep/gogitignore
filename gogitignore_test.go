@@ -1,3 +1,6 @@
+// Copyright 2026 Bjørn Erik Pedersen
+// SPDX-License-Identifier: MIT
+
 package gogitignore
 
 import (

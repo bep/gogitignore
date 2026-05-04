@@ -1,3 +1,6 @@
+// Copyright 2026 Bjørn Erik Pedersen
+// SPDX-License-Identifier: MIT
+
 // Package gogitignore implements gitignore-style path matching, organized
 // as a tree of matchers keyed by directory. Matchers cascade from outer
 // (root) to inner (sub-directory) so an inner pattern can negate one set
