@@ -8,6 +8,8 @@
 package gogitignore
 
 import (
+	"bufio"
+	"io"
 	"strings"
 	"sync"
 
@@ -22,18 +24,21 @@ type Tree struct {
 	// "/" for the root and "/sub/" for a sub-directory. The trailing
 	// slash is what keeps "/foo/" from spuriously prefix-matching
 	// "/foobar/x" when we look up the longest prefix.
+	// The empty key "" is reserved for global patterns that apply to every
+	// path in the tree.
 	tree *radix.Tree[Matcher]
 
 	mu sync.RWMutex
 }
 
+// New returns an empty Tree.
 func New() *Tree {
 	return &Tree{
 		tree: radix.New[Matcher](),
 	}
 }
 
-// AddPatterns parses patterns as gitignore lines and stores the resulting
+// InsertPatterns parses patterns as gitignore lines and stores the resulting
 // matcher at the given path. The path is the directory the patterns are
 // relative to (e.g. "/" for root, "/sub" for a sub-directory). Replaces
 // any existing matcher at that path.
@@ -43,19 +48,20 @@ func New() *Tree {
 // in-tree pattern (negation included) can override a global one. This is
 // the slot for patterns sourced from e.g. core.excludesFile; reading those
 // from disk is the caller's responsibility.
-func (t *Tree) AddPatterns(pth string, patterns ...string) {
-	t.AddMatcher(pth, parsePatternList(patterns))
+func (t *Tree) InsertPatterns(pth string, patterns ...string) {
+	t.InsertMatcher(pth, parsePatternList(patterns))
 }
 
-// AddMatcher inserts m into the tree at the given path. See AddPatterns
+// InsertMatcher inserts m into the tree at the given path. See InsertPatterns
 // for path semantics.
-func (t *Tree) AddMatcher(pth string, m Matcher) {
+func (t *Tree) InsertMatcher(pth string, m Matcher) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.tree.Insert(normalizeBase(pth), m)
 }
 
-// Match reports whether pth should be ignored. pth is a leading-slash, slash-separated path (e.g. "/foo/bar.txt") relative to the tree root.
+// Match reports whether pth should be ignored. pth is a leading-slash,
+// slash-separated path (e.g. "/foo/bar.txt") relative to the tree root.
 // isDir reports whether pth represents a directory.
 //
 // Match walks the tree from root down to pth, applying each .gitignore
@@ -192,7 +198,6 @@ func (m Matcher) apply(pth string, isDir, current bool) bool {
 }
 
 type pattern struct {
-	raw     string
 	globs   []glob.Glob
 	negate  bool
 	dirOnly bool
@@ -207,20 +212,31 @@ func (p *pattern) match(s string) bool {
 	return false
 }
 
-// ParseIgnoreFile parses .gitignore file content into a Matcher. Blank lines
-// and lines beginning with "#" are skipped. Trailing whitespace on each line
-// is stripped.
-func ParseIgnoreFile(content string) Matcher {
+// ParseIgnoreFile parses .gitignore file content in r into a Matcher. Blank
+// lines and lines beginning with "#" are skipped. Trailing whitespace on each
+// line is stripped. Returns an error only if reading from r fails; malformed
+// patterns are silently dropped.
+func ParseIgnoreFile(r io.Reader) (Matcher, error) {
 	var lines []string
-	for line := range strings.SplitSeq(content, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		line = strings.TrimRight(line, " \t")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			line = strings.TrimSuffix(line, "\n")
+			line = strings.TrimSuffix(line, "\r")
+			line = strings.TrimRight(line, " \t")
+			if line != "" && !strings.HasPrefix(line, "#") {
+				lines = append(lines, line)
+			}
 		}
-		lines = append(lines, line)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return Matcher{}, err
+		}
 	}
-	return parsePatternList(lines)
+	return parsePatternList(lines), nil
 }
 
 func parsePatternList(lines []string) Matcher {
@@ -237,7 +253,7 @@ func parsePatternList(lines []string) Matcher {
 }
 
 func parsePattern(line string) (pattern, bool) {
-	pat := pattern{raw: line}
+	var pat pattern
 
 	switch {
 	case strings.HasPrefix(line, `\!`), strings.HasPrefix(line, `\#`):

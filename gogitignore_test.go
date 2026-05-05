@@ -4,6 +4,7 @@
 package gogitignore
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path"
@@ -17,6 +18,17 @@ import (
 type pathToCheck struct {
 	path  string
 	isDir bool
+}
+
+// mustParse parses an in-memory .gitignore string and panics on error. Read
+// errors are impossible from a strings/bytes reader, so this is safe for
+// tests and benchmarks.
+func mustParse(s string) Matcher {
+	m, err := ParseIgnoreFile(strings.NewReader(s))
+	if err != nil {
+		panic(err)
+	}
+	return m
 }
 
 func TestTree(t *testing.T) {
@@ -306,7 +318,8 @@ H
 func TestParseIgnoreFile(t *testing.T) {
 	c := qt.New(t)
 
-	m := ParseIgnoreFile("# comment\n\n  \nfoo\n!bar\nbaz/\n")
+	m, err := ParseIgnoreFile(strings.NewReader("# comment\n\n  \nfoo\n!bar\nbaz/\n"))
+	c.Assert(err, qt.IsNil)
 	c.Assert(m.patterns, qt.HasLen, 3)
 
 	c.Assert(m.Match("foo", false), qt.IsTrue)
@@ -325,7 +338,7 @@ func TestTreeGlobalPatterns(t *testing.T) {
 	c := qt.New(t)
 
 	tree := New()
-	tree.AddPatterns("", "*.log", "build/")
+	tree.InsertPatterns("", "*.log", "build/")
 
 	c.Assert(tree.Match("/a.log", false), qt.IsTrue, qt.Commentf("global *.log applies at root"))
 	c.Assert(tree.Match("/sub/a.log", false), qt.IsTrue, qt.Commentf("global *.log applies at any depth"))
@@ -335,24 +348,24 @@ func TestTreeGlobalPatterns(t *testing.T) {
 
 	// The in-tree root .gitignore runs *after* the global, so a negation
 	// there must be able to re-include a path the global excluded.
-	tree.AddPatterns("/", "!important.log")
+	tree.InsertPatterns("/", "!important.log")
 	c.Assert(tree.Match("/important.log", false), qt.IsFalse, qt.Commentf("root .gitignore overrides global"))
 	c.Assert(tree.Match("/a.log", false), qt.IsTrue, qt.Commentf("non-negated globals still apply"))
 
 	// Adding at "" must not collide with adding at "/": they're two distinct
 	// matchers in the tree, both applicable to every path.
-	tree.AddPatterns("", "*.tmp")
+	tree.InsertPatterns("", "*.tmp")
 	c.Assert(tree.Match("/x.tmp", false), qt.IsTrue)
 	c.Assert(tree.Match("/important.log", false), qt.IsFalse, qt.Commentf("root negation still wins"))
 	c.Assert(tree.Match("/a.log", false), qt.IsFalse, qt.Commentf("global was replaced; *.log no longer there"))
 }
 
-func TestAddPatternsReplaces(t *testing.T) {
+func TestInsertPatternsReplaces(t *testing.T) {
 	c := qt.New(t)
 	tree := New()
-	tree.AddPatterns("/", "*.log")
+	tree.InsertPatterns("/", "*.log")
 	c.Assert(tree.Match("/a.log", false), qt.IsTrue)
-	tree.AddPatterns("/", "*.tmp")
+	tree.InsertPatterns("/", "*.tmp")
 	c.Assert(tree.Match("/a.log", false), qt.IsFalse)
 	c.Assert(tree.Match("/a.tmp", false), qt.IsTrue)
 }
@@ -374,14 +387,17 @@ func (t *testHelper) writeFiles(tree *Tree, files string) {
 			t.Fatalf("failed to write file %q: %v", pth, err)
 		}
 		if path.Base(f.Name) == ".gitignore" {
-			m := ParseIgnoreFile(string(f.Data))
+			m, err := ParseIgnoreFile(bytes.NewReader(f.Data))
+			if err != nil {
+				t.Fatalf("parse %q: %v", f.Name, err)
+			}
 			dir := path.Dir(f.Name)
 			if dir == "." {
 				dir = "/"
 			} else {
 				dir = "/" + dir
 			}
-			tree.AddMatcher(dir, m)
+			tree.InsertMatcher(dir, m)
 		}
 	}
 }

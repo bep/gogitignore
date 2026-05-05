@@ -49,13 +49,13 @@ src/**/*.tmp
 
 func BenchmarkParseIgnoreFile(b *testing.B) {
 	for b.Loop() {
-		_ = ParseIgnoreFile(realisticGitignore)
+		_ = mustParse(realisticGitignore)
 	}
 }
 
 func BenchmarkMatchRootShallow(b *testing.B) {
 	tree := New()
-	tree.AddMatcher("/", ParseIgnoreFile(realisticGitignore))
+	tree.InsertMatcher("/", mustParse(realisticGitignore))
 
 	b.Run("ignored_literal", func(b *testing.B) {
 		for b.Loop() {
@@ -76,7 +76,7 @@ func BenchmarkMatchRootShallow(b *testing.B) {
 
 func BenchmarkMatchRootDeep(b *testing.B) {
 	tree := New()
-	tree.AddMatcher("/", ParseIgnoreFile(realisticGitignore))
+	tree.InsertMatcher("/", mustParse(realisticGitignore))
 
 	b.Run("ignored_via_dir", func(b *testing.B) {
 		// /node_modules is dir-ignored at root; descendant lookup walks ancestors.
@@ -100,12 +100,12 @@ func BenchmarkMatchNestedMatchers(b *testing.B) {
 	// Build a tree with .gitignore matchers at increasing depths so each
 	// Match call has to consult and combine multiple matchers.
 	tree := New()
-	tree.AddMatcher("/", ParseIgnoreFile("*.log\n"))
+	tree.InsertMatcher("/", mustParse("*.log\n"))
 	depth := 8
 	base := ""
 	for i := range depth {
 		base += fmt.Sprintf("/d%d", i)
-		tree.AddMatcher(base, ParseIgnoreFile(fmt.Sprintf("local%d.tmp\n", i)))
+		tree.InsertMatcher(base, mustParse(fmt.Sprintf("local%d.tmp\n", i)))
 	}
 	innerHit := base + "/local7.tmp"
 	innerMiss := base + "/main.go"
@@ -123,7 +123,7 @@ func BenchmarkMatchNestedMatchers(b *testing.B) {
 }
 
 func BenchmarkMatcherDirect(b *testing.B) {
-	m := ParseIgnoreFile(realisticGitignore)
+	m := mustParse(realisticGitignore)
 	b.Run("hit", func(b *testing.B) {
 		for b.Loop() {
 			m.Match("server.log", false)
