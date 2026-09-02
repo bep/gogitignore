@@ -198,18 +198,13 @@ func (m Matcher) apply(pth string, isDir, current bool) bool {
 }
 
 type pattern struct {
-	globs   []glob.Glob
+	glob    *glob.Pattern
 	negate  bool
 	dirOnly bool
 }
 
 func (p *pattern) match(s string) bool {
-	for _, g := range p.globs {
-		if g.Match(s) {
-			return true
-		}
-	}
-	return false
+	return p.glob.Match(s)
 }
 
 // ParseIgnoreFile parses .gitignore file content in r into a Matcher. Blank
@@ -279,26 +274,22 @@ func parsePattern(line string) (pattern, bool) {
 		return pattern{}, false
 	}
 
-	var globs []string
-	switch {
-	case !anchored:
-		// Match either at the base or at any sub-depth. gobwas/glob's "**/x"
-		// does not match bare "x", so we add the literal alternative too.
-		globs = []string{line, "**/" + line}
-	case strings.HasPrefix(line, "**/"):
-		// "**/x" should also match "x" at the base per gitignore semantics.
-		globs = []string{line, line[3:]}
-	default:
-		globs = []string{line}
+	if !anchored {
+		line = "**/" + line
 	}
 
-	for _, g := range globs {
-		c, err := glob.Compile(g, '/')
-		if err != nil {
-			return pattern{}, false
-		}
-		pat.globs = append(pat.globs, c)
+	// In gitignore, "**/" matches zero or more directories, but gobwas/glob
+	// requires at least one, so rewrite it as an alternation.
+	line = strings.ReplaceAll(line, "/**/", "/{**/,}")
+	if strings.HasPrefix(line, "**/") {
+		line = "{**/,}" + line[3:]
 	}
+
+	g, err := glob.Compile(line, '/')
+	if err != nil {
+		return pattern{}, false
+	}
+	pat.glob = g
 	return pat, true
 }
 
